@@ -17,11 +17,20 @@ if(NOT gemmi_POPULATED)
     add_subdirectory(${gemmi_SOURCE_DIR} ${gemmi_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
 
-# OpenMP (manually specified for Homebrew on macOS)
-set(OPENMP_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
-set(OPENMP_LIBRARY "/opt/homebrew/opt/libomp/lib/libomp.dylib")
-if(NOT EXISTS "${OPENMP_INCLUDE_DIR}/omp.h" OR NOT EXISTS "${OPENMP_LIBRARY}")
-    message(FATAL_ERROR "OpenMP not found. Install it with 'brew install libomp'.")
+# Find OpenMP (use Homebrew's libomp on macOS)
+find_package(OpenMP)
+if(NOT OpenMP_CXX_FOUND)
+    # Manual fallback for Homebrew libomp on macOS
+    set(OPENMP_INCLUDE_DIR "/opt/homebrew/opt/libomp/include")
+    set(OPENMP_LIBRARY "/opt/homebrew/opt/libomp/lib/libomp.dylib")
+    if(EXISTS "${OPENMP_INCLUDE_DIR}/omp.h" AND EXISTS "${OPENMP_LIBRARY}")
+        set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp")
+        set(OpenMP_CXX_LIB_NAMES "libomp")
+        set(OpenMP_libomp_LIBRARY "${OPENMP_LIBRARY}")
+        set(OpenMP_CXX_FOUND TRUE)
+    else()
+        message(WARNING "OpenMP not found. Parallelization will be disabled.")
+    endif()
 endif()
 
 # Zlib (manually specified)
@@ -77,22 +86,28 @@ add_executable(diffractionSimulation
     src/main.cpp
 )
 
-# Check for NEON support and add NEON/SIMD flags for M1 Mac
+# Check for NEON support and add compiler flags
 include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-march=armv8-a+simd" COMPILER_SUPPORTS_NEON)
-if(COMPILER_SUPPORTS_NEON AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_NATIVE)
+if(COMPILER_SUPPORTS_NATIVE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     target_compile_options(diffractionSimulation PRIVATE
-        -march=armv8-a+simd  # Enable NEON
+        -O3                  # Aggressive optimization
+        -march=native        # Tune for native architecture (includes NEON on ARM)
         -mfpu=neon           # Explicitly enable NEON FPU
         -ffast-math          # Relax floating-point strictness for SIMD
-        -Xpreprocessor -fopenmp
     )
-    message(STATUS "NEON and SIMD support enabled with -march=armv8-a+simd and -mfpu=neon")
+    if(OpenMP_CXX_FOUND)
+        target_compile_options(diffractionSimulation PRIVATE ${OpenMP_CXX_FLAGS})
+        target_link_libraries(diffractionSimulation PRIVATE ${OpenMP_CXX_LIBRARIES})
+    endif()
+    message(STATUS "NEON and SIMD support enabled with -O3 -march=native -mfpu=neon")
 else()
-    message(WARNING "NEON not supported on this platform or compiler. SIMD optimizations may be limited.")
-    target_compile_options(diffractionSimulation PRIVATE
-        -Xpreprocessor -fopenmp
-    )
+    message(WARNING "NEON not supported or not an ARM64 platform. Falling back to generic optimization.")
+    target_compile_options(diffractionSimulation PRIVATE -O3)
+    if(OpenMP_CXX_FOUND)
+        target_compile_options(diffractionSimulation PRIVATE ${OpenMP_CXX_FLAGS})
+        target_link_libraries(diffractionSimulation PRIVATE ${OpenMP_CXX_LIBRARIES})
+    endif()
 endif()
 
 # Link libraries
@@ -101,30 +116,12 @@ target_link_libraries(diffractionSimulation
     GSL::gsl
     GSL::gslcblas
     gemmi::gemmi_cpp
-    ${OPENMP_LIBRARY}
     ${ZLIB_LIBRARY}
     ${BLAS_LIBRARIES}
-    ${FFTW3F_LIBRARY}      # Link FFTW single-precision
+    ${FFTW3F_LIBRARY}
 )
 
-# Check for NEON support and add NEON/SIMD flags for M1 Mac
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-march=armv8-a+simd" COMPILER_SUPPORTS_NEON)
-if(COMPILER_SUPPORTS_NEON AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-    target_compile_options(diffractionSimulation PRIVATE
-        -march=armv8-a+simd  # Enable NEON
-        -mfpu=neon           # Explicitly enable NEON FPU
-        -ffast-math          # Relax floating-point strictness for SIMD
-        -Xpreprocessor -fopenmp
-    )
-    message(STATUS "NEON and SIMD support enabled with -march=armv8-a+simd and -mfpu=neon")
-else()
-    message(WARNING "NEON not supported on this platform or compiler. SIMD optimizations may be limited.")
-    target_compile_options(diffractionSimulation PRIVATE
-        -Xpreprocessor -fopenmp
-    )
-endif()
-
+# Set output directory
 set_target_properties(diffractionSimulation PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
