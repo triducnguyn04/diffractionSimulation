@@ -2,6 +2,14 @@
 #include <iostream>
 #include <stdexcept>
 
+// Initialize static members
+bool CIFParser::hasLoadedData = false;
+aligned_vector<float> CIFParser::stored_x;
+aligned_vector<float> CIFParser::stored_y;
+aligned_vector<float> CIFParser::stored_z;
+aligned_vector<std::string> CIFParser::stored_elements;
+gemmi::UnitCell CIFParser::stored_cell;
+
 bool CIFParser::loadFromCIF(const std::string& filename, 
                             aligned_vector<float>& x, 
                             aligned_vector<float>& y, 
@@ -70,12 +78,37 @@ bool CIFParser::loadFromCIF(const std::string& filename,
             elements[i] = element;
         }
 
+        // Store the data statically
+        stored_x = x;
+        stored_y = y;
+        stored_z = z;
+        stored_elements = elements;
+        stored_cell = cell;
+        hasLoadedData = true;
+
         return true;
     }
     catch (const std::exception& e) {
         std::cerr << "Error loading CIF: " << e.what() << std::endl;
         return false;
     }
+}
+
+bool CIFParser::loadStoredData(aligned_vector<float>& x, 
+                               aligned_vector<float>& y, 
+                               aligned_vector<float>& z, 
+                               aligned_vector<std::string>& elements, 
+                               gemmi::UnitCell& cell) {
+    if (!hasLoadedData) {
+        return false; // No stored data available
+    }
+
+    x = stored_x;
+    y = stored_y;
+    z = stored_z;
+    elements = stored_elements;
+    cell = stored_cell;
+    return true;
 }
 
 float CIFParser::to_float(const std::string* str) const {
