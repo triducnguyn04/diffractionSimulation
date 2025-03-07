@@ -66,127 +66,65 @@ float DebyeScattering::getScatteringFactor(const std::string& element, float s) 
 
 bool DebyeScattering::loadFromCIF(const std::string& filename, float s_min_input, 
                                  float s_max_input, int n_points_input) {
-    try {
-        gemmi::cif::Document doc = gemmi::cif::read_file(filename);
-        gemmi::cif::Block& block = doc.sole_block();
-        clear();
-
-        auto to_float = [](const std::string* str) -> float {
-            if (!str || str->empty()) {
-                std::cerr << "Warning: Empty or null CIF value\n";
-                return 0.0f;
-            }
-            std::string cleaned = *str;
-            size_t pos = cleaned.find_first_of("()");
-            if (pos != std::string::npos) cleaned = cleaned.substr(0, pos);
-            return std::stof(cleaned);
-        };
-
-        cell.a = to_float(block.find_value("_cell_length_a"));
-        cell.b = to_float(block.find_value("_cell_length_b"));
-        cell.c = to_float(block.find_value("_cell_length_c"));
-        cell.alpha = to_float(block.find_value("_cell_angle_alpha"));
-        cell.beta = to_float(block.find_value("_cell_angle_beta"));
-        cell.gamma = to_float(block.find_value("_cell_angle_gamma"));
-
-        std::cout << "Unit cell: a=" << cell.a << ", b=" << cell.b << ", c=" << cell.c
-                  << ", alpha=" << cell.alpha << ", beta=" << cell.beta << ", gamma=" << cell.gamma << "\n";
-
-        float beta_rad = cell.beta * M_PI / 180.0f;
-        float cos_beta = std::cos(beta_rad);
-        float sin_beta = std::sin(beta_rad);
-        ax = static_cast<float>(cell.a);
-        by = static_cast<float>(cell.b);
-        cz_cos_beta = static_cast<float>(cell.c * cos_beta);
-        cz_sin_beta = static_cast<float>(cell.c * sin_beta);
-
-        auto type_col = block.find_loop("_atom_site_type_symbol");
-        auto x_col = block.find_loop("_atom_site_fract_x");
-        auto y_col = block.find_loop("_atom_site_fract_y");
-        auto z_col = block.find_loop("_atom_site_fract_z");
-
-        if (!type_col || !x_col || !y_col || !z_col) {
-            std::cerr << "Missing atom site columns in CIF" << std::endl;
-            return false;
-        }
-
-        size_t n_atoms = x_col.length();
-        std::cout << "Number of atoms loaded from CIF: " << n_atoms << "\n";
-
-        x.resize(n_atoms);
-        y.resize(n_atoms);
-        z.resize(n_atoms);
-        elements.resize(n_atoms);
-
-        for (size_t i = 0; i < n_atoms; ++i) {
-            std::string element = type_col[i];
-            float frac_x = to_float(&x_col[i]);
-            float frac_y = to_float(&y_col[i]);
-            float frac_z = to_float(&z_col[i]);
-
-            std::cout << "Atom " << i << ": " << element << ", frac=(" << frac_x << ", " << frac_y << ", " << frac_z << ")";
-
-            float cart_x = frac_x * ax + frac_z * cz_cos_beta;
-            float cart_y = frac_y * by;
-            float cart_z = frac_z * cz_sin_beta;
-
-            std::cout << ", cart=(" << cart_x << ", " << cart_y << ", " << cart_z << ")\n";
-
-            x[i] = cart_x;
-            y[i] = cart_y;
-            z[i] = cart_z;
-            elements[i] = element;
-        }
-
-        s_min = s_min_input;
-        s_max = s_max_input;
-        n_points = n_points_input;
-        ds = (s_max - s_min) / (n_points - 1);
-        f_V.resize(n_points);
-        f_O.resize(n_points);
-        s_values_.resize(n_points);
-
-        std::cout << "Precomputing scattering factors for V and O...\n";
-        for (int i = 0; i < n_points; i += 4) {
-            if (i + 3 < n_points) {
-                float32x4_t s_vec = {s_min + i * ds, s_min + (i + 1) * ds, 
-                                     s_min + (i + 2) * ds, s_min + (i + 3) * ds};
-                vst1q_f32(&s_values_[i], s_vec);
-                float32x4_t s2_vec = vmulq_f32(s_vec, s_vec);
-
-                float v_s2[4];
-                vst1q_f32(v_s2, s2_vec);
-                float v_vals[4];
-                for (int m = 0; m < 4; ++m) {
-                    v_vals[m] = getScatteringFactor("V", std::sqrt(v_s2[m]));
-                }
-                float32x4_t f_V_vec = vld1q_f32(v_vals);
-                vst1q_f32(&f_V[i], f_V_vec);
-
-                float o_vals[4];
-                for (int m = 0; m < 4; ++m) {
-                    o_vals[m] = getScatteringFactor("O", std::sqrt(v_s2[m]));
-                }
-                float32x4_t f_O_vec = vld1q_f32(o_vals);
-                vst1q_f32(&f_O[i], f_O_vec);
-            } else {
-                for (; i < n_points; i++) {
-                    float s = s_min + i * ds;
-                    f_V[i] = getScatteringFactor("V", s);
-                    f_O[i] = getScatteringFactor("O", s);
-                    s_values_[i] = s;
-                }
-            }
-        }
-
-        return true;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error loading CIF: " << e.what() << std::endl;
+    CIFParser parser;
+    clear();
+    if (!parser.loadFromCIF(filename, x, y, z, elements, cell)) {
         return false;
     }
+
+    float beta_rad = cell.beta * M_PI / 180.0f;
+    float cos_beta = std::cos(beta_rad);
+    float sin_beta = std::sin(beta_rad);
+    ax = static_cast<float>(cell.a);
+    by = static_cast<float>(cell.b);
+    cz_cos_beta = static_cast<float>(cell.c * cos_beta);
+    cz_sin_beta = static_cast<float>(cell.c * sin_beta);
+
+    s_min = s_min_input;
+    s_max = s_max_input;
+    n_points = n_points_input;
+    ds = (s_max - s_min) / (n_points - 1);
+    f_V.resize(n_points);
+    f_O.resize(n_points);
+    s_values_.resize(n_points);
+
+    std::cout << "Precomputing scattering factors for V and O...\n";
+    for (int i = 0; i < n_points; i += 4) {
+        if (i + 3 < n_points) {
+            float32x4_t s_vec = {s_min + i * ds, s_min + (i + 1) * ds, 
+                                 s_min + (i + 2) * ds, s_min + (i + 3) * ds};
+            vst1q_f32(&s_values_[i], s_vec);
+            float32x4_t s2_vec = vmulq_f32(s_vec, s_vec);
+
+            float v_s2[4];
+            vst1q_f32(v_s2, s2_vec);
+            float v_vals[4];
+            for (int m = 0; m < 4; ++m) {
+                v_vals[m] = getScatteringFactor("V", std::sqrt(v_s2[m]));
+            }
+            float32x4_t f_V_vec = vld1q_f32(v_vals);
+            vst1q_f32(&f_V[i], f_V_vec);
+
+            float o_vals[4];
+            for (int m = 0; m < 4; ++m) {
+                o_vals[m] = getScatteringFactor("O", std::sqrt(v_s2[m]));
+            }
+            float32x4_t f_O_vec = vld1q_f32(o_vals);
+            vst1q_f32(&f_O[i], f_O_vec);
+        } else {
+            for (; i < n_points; i++) {
+                float s = s_min + i * ds;
+                f_V[i] = getScatteringFactor("V", s);
+                f_O[i] = getScatteringFactor("O", s);
+                s_values_[i] = s;
+            }
+        }
+    }
+
+    return true;
 }
 
+// Rest of the file (calculateMultiplicity, getAtomCount, calculateIntensity) remains unchanged
 size_t DebyeScattering::calculateMultiplicity(int nx, int ny, int nz, int n_replicas) const {
     int doubled_replicas = 2 * n_replicas;
     int min_x = std::max(-n_replicas, -n_replicas - nx);
@@ -207,9 +145,9 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
                                         std::vector<float>& intensities) {
     int n = x.size();
     intensities.resize(n_points, 0.0f);
-    s_values.resize(n_points); // Resize to match s_values_
+    s_values.resize(n_points);
     for (int i = 0; i < n_points; ++i) {
-        s_values[i] = s_values_[i]; // Copy elements
+        s_values[i] = s_values_[i];
     }
 
     std::cout << "Calculating intensity from central unit cell with " << n 
