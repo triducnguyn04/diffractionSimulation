@@ -64,25 +64,7 @@ float DebyeScattering::getScatteringFactor(const std::string& element, float s) 
     return 1.0f;
 }
 
-bool DebyeScattering::loadFromCIF(const std::string& filename, float s_min_input, 
-                                 float s_max_input, int n_points_input) {
-    CIFParser parser;
-    clear();
-    if (!parser.loadFromCIF(filename, x, y, z, elements, cell)) {
-        return false;
-    }
-
-    float beta_rad = cell.beta * M_PI / 180.0f;
-    float cos_beta = std::cos(beta_rad);
-    float sin_beta = std::sin(beta_rad);
-    ax = static_cast<float>(cell.a);
-    by = static_cast<float>(cell.b);
-    cz_cos_beta = static_cast<float>(cell.c * cos_beta);
-    cz_sin_beta = static_cast<float>(cell.c * sin_beta);
-
-    s_min = s_min_input;
-    s_max = s_max_input;
-    n_points = n_points_input;
+void DebyeScattering::precomputeScatteringFactors() {
     ds = (s_max - s_min) / (n_points - 1);
     f_V.resize(n_points);
     f_O.resize(n_points);
@@ -120,11 +102,60 @@ bool DebyeScattering::loadFromCIF(const std::string& filename, float s_min_input
             }
         }
     }
+}
+
+bool DebyeScattering::loadFromCIF(const std::string& filename, float s_min_input, 
+                                 float s_max_input, int n_points_input) {
+    CIFParser parser;
+    clear();
+    if (!parser.loadFromCIF(filename, x, y, z, elements, cell)) {
+        return false;
+    }
+
+    float beta_rad = cell.beta * M_PI / 180.0f;
+    float cos_beta = std::cos(beta_rad);
+    float sin_beta = std::sin(beta_rad);
+    ax = static_cast<float>(cell.a);
+    by = static_cast<float>(cell.b);
+    cz_cos_beta = static_cast<float>(cell.c * cos_beta);
+    cz_sin_beta = static_cast<float>(cell.c * sin_beta);
+
+    s_min = s_min_input;
+    s_max = s_max_input;
+    n_points = n_points_input;
+    precomputeScatteringFactors();
 
     return true;
 }
 
-// Rest of the file (calculateMultiplicity, getAtomCount, calculateIntensity) remains unchanged
+void DebyeScattering::setData(const aligned_vector<float>& x_in, 
+                              const aligned_vector<float>& y_in, 
+                              const aligned_vector<float>& z_in, 
+                              const aligned_vector<std::string>& elements_in, 
+                              const gemmi::UnitCell& cell_in, 
+                              float s_min_input, float s_max_input, int n_points_input) {
+    clear();
+    x = x_in;
+    y = y_in;
+    z = z_in;
+    elements = elements_in;
+    cell = cell_in;
+
+    float beta_rad = cell.beta * M_PI / 180.0f;
+    float cos_beta = std::cos(beta_rad);
+    float sin_beta = std::sin(beta_rad);
+    ax = static_cast<float>(cell.a);
+    by = static_cast<float>(cell.b);
+    cz_cos_beta = static_cast<float>(cell.c * cos_beta);
+    cz_sin_beta = static_cast<float>(cell.c * sin_beta);
+
+    s_min = s_min_input;
+    s_max = s_max_input;
+    n_points = n_points_input;
+    precomputeScatteringFactors();
+}
+
+// Rest of the file remains unchanged
 size_t DebyeScattering::calculateMultiplicity(int nx, int ny, int nz, int n_replicas) const {
     int doubled_replicas = 2 * n_replicas;
     int min_x = std::max(-n_replicas, -n_replicas - nx);
