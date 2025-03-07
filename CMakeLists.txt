@@ -83,6 +83,7 @@ add_executable(diffractionSimulation
     src/fitting.cpp
     src/debyescattering.cpp
     src/braggcalculation.cpp
+    src/cifparser.cpp
     src/main.cpp
 )
 
