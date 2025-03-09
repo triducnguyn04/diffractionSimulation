@@ -34,6 +34,7 @@ public:
 private:
     aligned_vector<float> x, y, z;           // Cartesian coordinates of atoms
     aligned_vector<std::string> elements;    // Element symbols (e.g., "V", "O")
+    aligned_vector<int> elem_indices;        // Added: Precomputed indices (0 for "V", 1 for "O")
     gemmi::UnitCell cell;                    // Unit cell parameters from CIF
 
     float s_min, s_max, ds;                  // Scattering vector range and step size
@@ -54,7 +55,7 @@ private:
     inline float interpolateSinc(float x) const;
     float getScatteringFactor(const std::string& element, float s) const;
     size_t calculateMultiplicity(int nx, int ny, int nz, int n_replicas) const;
-    void precomputeScatteringFactors();      // New helper to avoid code duplication
+    void precomputeScatteringFactors();
 };
 
 #endif // DEBYESCATTERING_H
