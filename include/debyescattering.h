@@ -4,7 +4,7 @@
 #include <gemmi/unitcell.hpp>
 #include <vector>
 #include <string>
-#include "aligned_memory.h" // Include the new header
+#include "aligned_memory.h"
 #include "cifparser.h"
 
 #ifdef __ARM_NEON
@@ -20,6 +20,12 @@ public:
 
     void clear();
     bool loadFromCIF(const std::string& filename, float s_min, float s_max, int n_points);
+    void setData(const aligned_vector<float>& x_in, 
+                 const aligned_vector<float>& y_in, 
+                 const aligned_vector<float>& z_in, 
+                 const aligned_vector<std::string>& elements_in, 
+                 const gemmi::UnitCell& cell_in, 
+                 float s_min, float s_max, int n_points);
     void calculateIntensity(int n_replicas, float r_max, 
                            std::vector<float>& s_values, 
                            std::vector<float>& intensities);
@@ -39,7 +45,7 @@ private:
     float ax, by, cz_cos_beta, cz_sin_beta;
 
     // Sinc table for fast lookup in intensity calculation
-    static constexpr size_t SINC_TABLE_SIZE = 1000000;
+    static constexpr size_t SINC_TABLE_SIZE = 100000;
     static constexpr float SINC_MAX = 6000.0f;
     aligned_vector<float> sinc_table;
 
@@ -48,6 +54,7 @@ private:
     inline float interpolateSinc(float x) const;
     float getScatteringFactor(const std::string& element, float s) const;
     size_t calculateMultiplicity(int nx, int ny, int nz, int n_replicas) const;
+    void precomputeScatteringFactors();      // New helper to avoid code duplication
 };
 
 #endif // DEBYESCATTERING_H
