@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <arm_neon.h>
 #include <memory>
+#include <zlib.h>
 
 DebyeScattering::DebyeScattering() {
     clear();
@@ -28,40 +29,32 @@ void DebyeScattering::clear() {
 }
 
 void DebyeScattering::initSincTable() {
-    sinc_table.resize(SINC_TABLE_SIZE);
-    float step = SINC_MAX / (SINC_TABLE_SIZE - 1);
-    for (size_t i = 0; i < SINC_TABLE_SIZE; ++i) {
-        float x = i * step;
-        sinc_table[i] = (x == 0.0f) ? 1.0f : std::sin(x) / x;
+    // Load and decompress sinc table from file
+    const size_t TABLE_SIZE = 100000;
+    const float MAX_X = 6000.0f;
+    sinc_table.resize(TABLE_SIZE);
+
+    std::ifstream file("sinc_table.zlib", std::ios::binary);
+    if (!file) {
+        std::cerr << "Error: Cannot open sinc_table.zlib\n";
+        throw std::runtime_error("Sinc table file missing");
     }
-}
 
-inline float DebyeScattering::interpolateSinc(float x) const {
-    if (x >= SINC_MAX) return 0.0f;
-    float index = x * (SINC_TABLE_SIZE - 1) / SINC_MAX;
-    size_t i = static_cast<size_t>(index);
-    float frac = index - i;
-    if (i + 1 >= SINC_TABLE_SIZE) return sinc_table[SINC_TABLE_SIZE - 1];
-    return sinc_table[i] * (1.0f - frac) + sinc_table[i + 1] * frac;
-}
+    file.seekg(0, std::ios::end);
+    size_t compressed_size = file.tellg();
+    file.seekg(0, std::ios::beg);
 
-float DebyeScattering::getScatteringFactor(const std::string& element, float s) const {
-    float s2 = s * s;
-    if (element == "V") {
-        return 2.05710f * std::exp(-102.478f * s2) + 
-               2.07030f * std::exp(-26.8938f * s2) + 
-               7.35110f * std::exp(-0.438500f * s2) + 
-               10.2971f * std::exp(-6.86570f * s2) + 
-               1.21990f;
-    } 
-    if (element == "O") {
-        return 0.867f * std::exp(-32.9089f * s2) + 
-               1.54630f * std::exp(-0.323900f * s2) + 
-               2.28680f * std::exp(-5.70110f * s2) + 
-               3.04850f * std::exp(-13.2771f * s2) + 
-               0.2508f;
-    } 
-    return 1.0f;
+    std::vector<unsigned char> compressed(compressed_size);
+    file.read(reinterpret_cast<char*>(compressed.data()), compressed_size);
+    file.close();
+
+    uLongf decompressed_size = TABLE_SIZE * sizeof(float);
+    if (uncompress(reinterpret_cast<unsigned char*>(sinc_table.data()), &decompressed_size, 
+                   compressed.data(), compressed_size) != Z_OK || 
+        decompressed_size != TABLE_SIZE * sizeof(float)) {
+        std::cerr << "Error: Sinc table decompression failed\n";
+        throw std::runtime_error("Sinc table decompression failed");
+    }
 }
 
 void DebyeScattering::precomputeScatteringFactors() {
@@ -82,22 +75,41 @@ void DebyeScattering::precomputeScatteringFactors() {
             vst1q_f32(v_s2, s2_vec);
             float v_vals[4];
             for (int m = 0; m < 4; ++m) {
-                v_vals[m] = getScatteringFactor("V", std::sqrt(v_s2[m]));
+                float s2 = v_s2[m];
+                v_vals[m] = 2.05710f * std::exp(-102.478f * s2) + 
+                            2.07030f * std::exp(-26.8938f * s2) + 
+                            7.35110f * std::exp(-0.438500f * s2) + 
+                            10.2971f * std::exp(-6.86570f * s2) + 
+                            1.21990f; // Inlined for "V"
             }
             float32x4_t f_V_vec = vld1q_f32(v_vals);
             vst1q_f32(&f_V[i], f_V_vec);
 
             float o_vals[4];
             for (int m = 0; m < 4; ++m) {
-                o_vals[m] = getScatteringFactor("O", std::sqrt(v_s2[m]));
+                float s2 = v_s2[m];
+                o_vals[m] = 0.867f * std::exp(-32.9089f * s2) + 
+                            1.54630f * std::exp(-0.323900f * s2) + 
+                            2.28680f * std::exp(-5.70110f * s2) + 
+                            3.04850f * std::exp(-13.2771f * s2) + 
+                            0.2508f; // Inlined for "O"
             }
             float32x4_t f_O_vec = vld1q_f32(o_vals);
             vst1q_f32(&f_O[i], f_O_vec);
         } else {
             for (; i < n_points; i++) {
                 float s = s_min + i * ds;
-                f_V[i] = getScatteringFactor("V", s);
-                f_O[i] = getScatteringFactor("O", s);
+                float s2 = s * s;
+                f_V[i] = 2.05710f * std::exp(-102.478f * s2) + 
+                         2.07030f * std::exp(-26.8938f * s2) + 
+                         7.35110f * std::exp(-0.438500f * s2) + 
+                         10.2971f * std::exp(-6.86570f * s2) + 
+                         1.21990f; // Inlined for "V"
+                f_O[i] = 0.867f * std::exp(-32.9089f * s2) + 
+                         1.54630f * std::exp(-0.323900f * s2) + 
+                         2.28680f * std::exp(-5.70110f * s2) + 
+                         3.04850f * std::exp(-13.2771f * s2) + 
+                         0.2508f; // Inlined for "O"
                 s_values_[i] = s;
             }
         }
@@ -155,7 +167,6 @@ void DebyeScattering::setData(const aligned_vector<float>& x_in,
     precomputeScatteringFactors();
 }
 
-// Rest of the file remains unchanged
 size_t DebyeScattering::calculateMultiplicity(int nx, int ny, int nz, int n_replicas) const {
     int doubled_replicas = 2 * n_replicas;
     int min_x = std::max(-n_replicas, -n_replicas - nx);
@@ -191,9 +202,9 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
     std::vector<ReplicaShift> shifts;
     shifts.reserve((2 * n_replicas + 1) * (2 * n_replicas + 1) * (2 * n_replicas + 1));
 
-    for (int nx = -2*n_replicas; nx <= 2*n_replicas; nx++) {
-        for (int ny = -2*n_replicas; ny <= 2*n_replicas; ny++) {
-            for (int nz = -2*n_replicas; nz <= 2*n_replicas; nz++) {
+    for (int nx = -2 * n_replicas; nx <= 2 * n_replicas; nx++) {
+        for (int ny = -2 * n_replicas; ny <= 2 * n_replicas; ny++) {
+            for (int nz = -2 * n_replicas; nz <= 2 * n_replicas; nz++) {
                 float shift_x = nx * ax + nz * cz_cos_beta;
                 float shift_y = ny * by;
                 float shift_z = nz * cz_sin_beta;
@@ -213,7 +224,7 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
     aligned_vector<float> local_intensities(n_points, 0.0f);
 
     #ifdef _OPENMP
-    #pragma omp parallel for reduction(+:local_intensities[:n_points])
+    #pragma omp parallel for reduction(+:local_intensities[:n_points]) schedule(guided)
     #endif
     for (size_t s = 0; s < shifts.size(); s++) {
         float shift_x = shifts[s].shift_x;
@@ -243,7 +254,20 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
                     vst1q_f32(sr_vals, sr_vec);
                     float sinc_vals[4];
                     for (int m = 0; m < 4; ++m) {
-                        sinc_vals[m] = is_self ? 1.0f : interpolateSinc(sr_vals[m]);
+                        float x = sr_vals[m];
+                        if (x >= 6000.0f) {
+                            sinc_vals[m] = 0.0f;
+                        } else {
+                            float index = x * (100000 - 1) / 6000.0f;
+                            size_t idx = static_cast<size_t>(index);
+                            float frac = index - idx;
+                            if (idx + 1 >= 100000) {
+                                sinc_vals[m] = sinc_table[100000 - 1];
+                            } else {
+                                sinc_vals[m] = sinc_table[idx] * (1.0f - frac) + sinc_table[idx + 1] * frac;
+                            }
+                        }
+                        if (is_self) sinc_vals[m] = 1.0f;
                     }
                     float32x4_t sinc_vec = vld1q_f32(sinc_vals);
 
@@ -256,7 +280,20 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
 
                 for (; k < n_points; k++) {
                     float sr = s_values_[k] * rij;
-                    float sinc_val = is_self ? 1.0f : interpolateSinc(sr);
+                    float sinc_val;
+                    if (sr >= 6000.0f) {
+                        sinc_val = 0.0f;
+                    } else {
+                        float index = sr * (100000) / 6000.0f;
+                        size_t idx = static_cast<size_t>(index);
+                        float frac = index - idx;
+                        if (idx + 1 >= 100000) {
+                            sinc_val = sinc_table[100000 - 1];
+                        } else {
+                            sinc_val = sinc_table[idx] * (1.0f - frac) + sinc_table[idx + 1] * frac;
+                        }
+                    }
+                    if (is_self) sinc_val = 1.0f;
                     float fi = (ei == 0) ? f_V[k] : f_O[k];
                     float fj = (ej == 0) ? f_V[k] : f_O[k];
                     local_intensities[k] += fi * fj * sinc_val * shifts[s].multiplicity;
