@@ -80,8 +80,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Box dimensions: nx=" << nx << ", ny=" << ny << ", nz=" << nz << std::endl;
 
     DebyeScattering debye;
-    float s_min = 1.0f, s_max = 10.0f;
-    int n_points = 5000;
+    float s_min = 1.0f, s_max = 12.0f;
+    int n_points = 1000;
 
     // Load CIF data
     bool loadSuccess = false;
