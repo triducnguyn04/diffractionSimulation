@@ -18,6 +18,7 @@ void DebyeScattering::clear() {
     y.clear();
     z.clear();
     elements.clear();
+    elem_indices.clear(); // Clear added member
     s_min = 0.0f;
     s_max = 0.0f;
     ds = 0.0f;
@@ -29,7 +30,6 @@ void DebyeScattering::clear() {
 }
 
 void DebyeScattering::initSincTable() {
-    // Load and decompress sinc table from file
     const size_t TABLE_SIZE = 100000;
     const float MAX_X = 6000.0f;
     sinc_table.resize(TABLE_SIZE);
@@ -80,7 +80,7 @@ void DebyeScattering::precomputeScatteringFactors() {
                             2.07030f * std::exp(-26.8938f * s2) + 
                             7.35110f * std::exp(-0.438500f * s2) + 
                             10.2971f * std::exp(-6.86570f * s2) + 
-                            1.21990f; // Inlined for "V"
+                            1.21990f;
             }
             float32x4_t f_V_vec = vld1q_f32(v_vals);
             vst1q_f32(&f_V[i], f_V_vec);
@@ -92,7 +92,7 @@ void DebyeScattering::precomputeScatteringFactors() {
                             1.54630f * std::exp(-0.323900f * s2) + 
                             2.28680f * std::exp(-5.70110f * s2) + 
                             3.04850f * std::exp(-13.2771f * s2) + 
-                            0.2508f; // Inlined for "O"
+                            0.2508f;
             }
             float32x4_t f_O_vec = vld1q_f32(o_vals);
             vst1q_f32(&f_O[i], f_O_vec);
@@ -104,12 +104,12 @@ void DebyeScattering::precomputeScatteringFactors() {
                          2.07030f * std::exp(-26.8938f * s2) + 
                          7.35110f * std::exp(-0.438500f * s2) + 
                          10.2971f * std::exp(-6.86570f * s2) + 
-                         1.21990f; // Inlined for "V"
+                         1.21990f;
                 f_O[i] = 0.867f * std::exp(-32.9089f * s2) + 
                          1.54630f * std::exp(-0.323900f * s2) + 
                          2.28680f * std::exp(-5.70110f * s2) + 
                          3.04850f * std::exp(-13.2771f * s2) + 
-                         0.2508f; // Inlined for "O"
+                         0.2508f;
                 s_values_[i] = s;
             }
         }
@@ -136,6 +136,11 @@ bool DebyeScattering::loadFromCIF(const std::string& filename, float s_min_input
     s_max = s_max_input;
     n_points = n_points_input;
     precomputeScatteringFactors();
+
+    elem_indices.resize(elements.size()); // Initialize here
+    for (size_t i = 0; i < elements.size(); i++) {
+        elem_indices[i] = (elements[i] == "V") ? 0 : 1;
+    }
 
     return true;
 }
@@ -165,10 +170,14 @@ void DebyeScattering::setData(const aligned_vector<float>& x_in,
     s_max = s_max_input;
     n_points = n_points_input;
     precomputeScatteringFactors();
+
+    elem_indices.resize(elements.size()); // Initialize here
+    for (size_t i = 0; i < elements.size(); i++) {
+        elem_indices[i] = (elements[i] == "V") ? 0 : 1;
+    }
 }
 
 size_t DebyeScattering::calculateMultiplicity(int nx, int ny, int nz, int n_replicas) const {
-    int doubled_replicas = 2 * n_replicas;
     int min_x = std::max(-n_replicas, -n_replicas - nx);
     int max_x = std::min(n_replicas, n_replicas - nx);
     int min_y = std::max(-n_replicas, -n_replicas - ny);
@@ -209,16 +218,9 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
                 float shift_y = ny * by;
                 float shift_z = nz * cz_sin_beta;
                 float r = std::sqrt(shift_x * shift_x + shift_y * shift_y + shift_z * shift_z);
-                if (r <= r_max) {
-                    shifts.push_back({shift_x, shift_y, shift_z, calculateMultiplicity(nx, ny, nz, n_replicas)});
-                }
+                shifts.push_back({shift_x, shift_y, shift_z, calculateMultiplicity(nx, ny, nz, n_replicas)});
             }
         }
-    }
-
-    aligned_vector<int> elem_indices(n);
-    for (int i = 0; i < n; i++) {
-        elem_indices[i] = (elements[i] == "V") ? 0 : 1;
     }
 
     aligned_vector<float> local_intensities(n_points, 0.0f);
@@ -233,12 +235,12 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
         float32x4_t multiplicity_vec = vdupq_n_f32(static_cast<float>(shifts[s].multiplicity));
 
         for (int i = 0; i < n; i++) {
-            int ei = elem_indices[i];
+            int ei = elem_indices[i]; // Using class member
             float xi = x[i], yi = y[i], zi = z[i];
             float32x4_t* fi_vec = (ei == 0) ? (float32x4_t*)f_V.data() : (float32x4_t*)f_O.data();
 
             for (int j = 0; j < n; j++) {
-                int ej = elem_indices[j];
+                int ej = elem_indices[j]; // Using class member
                 float dx = xi - (x[j] + shift_x);
                 float dy = yi - (y[j] + shift_y);
                 float dz = zi - (z[j] + shift_z);
@@ -247,56 +249,36 @@ void DebyeScattering::calculateIntensity(int n_replicas, float r_max,
                 float32x4_t rij_vec = vdupq_n_f32(rij);
 
                 int k = 0;
-                for (; k < n_points - 3; k += 4) {
-                    float32x4_t s_vec = vld1q_f32(&s_values_[k]);
-                    float32x4_t sr_vec = vmulq_f32(s_vec, rij_vec);
-                    float sr_vals[4];
-                    vst1q_f32(sr_vals, sr_vec);
-                    float sinc_vals[4];
-                    for (int m = 0; m < 4; ++m) {
-                        float x = sr_vals[m];
-                        if (x >= 6000.0f) {
-                            sinc_vals[m] = 0.0f;
-                        } else {
+                if (is_self) {
+                    for (; k < n_points; k += 4) {
+                        float32x4_t sinc_vec = vdupq_n_f32(1.0f);
+                        float32x4_t fj_vec = vld1q_f32(&((ej == 0) ? f_V[k] : f_O[k]));
+                        float32x4_t contrib = vmulq_f32(vmulq_f32(fi_vec[k / 4], fj_vec), 
+                                                      vmulq_f32(sinc_vec, multiplicity_vec));
+                        float32x4_t intensity_vec = vld1q_f32(&local_intensities[k]);
+                        vst1q_f32(&local_intensities[k], vaddq_f32(intensity_vec, contrib));
+                    }
+                } else {
+                    for (; k < n_points; k += 4) {
+                        float32x4_t sr_vec = vmulq_f32(vld1q_f32(&s_values_[k]), rij_vec);
+                        float sr_vals[4];
+                        vst1q_f32(sr_vals, sr_vec);
+                        float sinc_vals[4];
+                        for (int m = 0; m < 4; ++m) {
+                            float x = sr_vals[m];
                             float index = x * (100000 - 1) / 6000.0f;
                             size_t idx = static_cast<size_t>(index);
                             float frac = index - idx;
-                            if (idx + 1 >= 100000) {
-                                sinc_vals[m] = sinc_table[100000 - 1];
-                            } else {
-                                sinc_vals[m] = sinc_table[idx] * (1.0f - frac) + sinc_table[idx + 1] * frac;
-                            }
+                            sinc_vals[m] = sinc_table[idx] * (1.0f - frac) + sinc_table[idx + 1] * frac;
                         }
-                        if (is_self) sinc_vals[m] = 1.0f;
-                    }
-                    float32x4_t sinc_vec = vld1q_f32(sinc_vals);
+                        float32x4_t sinc_vec = vld1q_f32(sinc_vals);
 
-                    float32x4_t fj_vec = vld1q_f32(&((ej == 0) ? f_V[k] : f_O[k]));
-                    float32x4_t contrib = vmulq_f32(vmulq_f32(fi_vec[k / 4], fj_vec), 
-                                                  vmulq_f32(sinc_vec, multiplicity_vec));
-                    float32x4_t intensity_vec = vld1q_f32(&local_intensities[k]);
-                    vst1q_f32(&local_intensities[k], vaddq_f32(intensity_vec, contrib));
-                }
-
-                for (; k < n_points; k++) {
-                    float sr = s_values_[k] * rij;
-                    float sinc_val;
-                    if (sr >= 6000.0f) {
-                        sinc_val = 0.0f;
-                    } else {
-                        float index = sr * (100000) / 6000.0f;
-                        size_t idx = static_cast<size_t>(index);
-                        float frac = index - idx;
-                        if (idx + 1 >= 100000) {
-                            sinc_val = sinc_table[100000 - 1];
-                        } else {
-                            sinc_val = sinc_table[idx] * (1.0f - frac) + sinc_table[idx + 1] * frac;
-                        }
+                        float32x4_t fj_vec = vld1q_f32(&((ej == 0) ? f_V[k] : f_O[k]));
+                        float32x4_t contrib = vmulq_f32(vmulq_f32(fi_vec[k / 4], fj_vec), 
+                                                      vmulq_f32(sinc_vec, multiplicity_vec));
+                        float32x4_t intensity_vec = vld1q_f32(&local_intensities[k]);
+                        vst1q_f32(&local_intensities[k], vaddq_f32(intensity_vec, contrib));
                     }
-                    if (is_self) sinc_val = 1.0f;
-                    float fi = (ei == 0) ? f_V[k] : f_O[k];
-                    float fj = (ej == 0) ? f_V[k] : f_O[k];
-                    local_intensities[k] += fi * fj * sinc_val * shifts[s].multiplicity;
                 }
             }
         }
